@@ -13,7 +13,7 @@ import sys
 import json
 import argparse
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from tabulate import tabulate
 
 # Suppress harmless warnings
@@ -26,7 +26,8 @@ from portfolio_tools import (
     format_inr,
     normalize_indian_ticker,
     infer_asset_class,
-    parse_holdings_shorthand
+    parse_holdings_shorthand,
+    parse_conversational_text
 )
 from agent import FinancialAdvisorAgent, COMPLIANCE_BANNER
 
@@ -168,6 +169,15 @@ def display_cli_rebalance_report(rebalance_data: Dict[str, Any]):
     print("\n[Executable Rebalancing Orders]")
     if order_rows:
         print(tabulate(order_rows, headers=o_headers, tablefmt="fancy_grid"))
+
+        print("\n[Strategic Trade Rationales (Why Buy or Sell Each Stock)]")
+        for o in rebalance_data.get("orders", []):
+            if o["action"] == "HOLD":
+                continue
+            act = "🟢 BUY" if o["action"] == "BUY" else "🔴 SELL"
+            rat = o.get("rationale", "Rebalance to target allocation.")
+            print(f"  • {act} {o['ticker']} ({o['shares_to_trade']:,} shares / {o['order_value_formatted']}):")
+            print(f"    ↳ {rat}")
     else:
         print("No trades needed. Portfolio is perfectly aligned with targets!")
 
@@ -208,19 +218,26 @@ def run_portfolio_analysis(
     print(advisor_report)
 
 
-def select_target_model() -> Dict[str, float]:
-    """Helper to select or customize a target asset allocation model."""
-    print("\nSelect Target Asset Allocation Model:")
+def prompt_investment_mode(current_mode: str = "Aggressive Growth") -> Tuple[str, Dict[str, float]]:
+    """
+    Helper to select target investment mode (Aggressive, Moderate, Conservative, Custom).
+    Returns (model_name, target_allocations_dict).
+    """
+    print("\n🎯 Select Target Investment Mode / Risk Profile:")
     print("  [1] Aggressive Growth      (50% Indian Equity, 15% Int'l, 20% Debt, 10% Gold, 5% Cash)")
     print("  [2] Moderate Balanced      (40% Indian Equity, 10% Int'l, 35% Debt, 10% Gold, 5% Cash)")
     print("  [3] Conservative Preserve  (20% Indian Equity, 5% Int'l, 55% Debt, 15% Gold, 5% Cash)")
     print("  [4] Custom Percentages")
 
-    m_choice = input("Enter choice [1-4] (default 1): ").strip()
+    try:
+        m_choice = input(f"Enter choice [1-4] (default 1): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return "Aggressive Growth", DEFAULT_ALLOCATION_MODELS["Aggressive Growth"]
+
     if m_choice == "2":
-        return DEFAULT_ALLOCATION_MODELS["Moderate Balanced"]
+        return "Moderate Balanced", DEFAULT_ALLOCATION_MODELS["Moderate Balanced"]
     elif m_choice == "3":
-        return DEFAULT_ALLOCATION_MODELS["Conservative Preservation"]
+        return "Conservative Preservation", DEFAULT_ALLOCATION_MODELS["Conservative Preservation"]
     elif m_choice == "4":
         print("\nEnter custom target percentages (must sum to 100):")
         try:
@@ -232,18 +249,25 @@ def select_target_model() -> Dict[str, float]:
             total = eq + intl + debt + gold + cash
             if abs(total - 100.0) > 1.0:
                 print(f"Warning: Allocations sum to {total}%, normalizing to 100%.")
-            return {
+            custom_dict = {
                 "Indian Equity": eq / total,
                 "International Equity": intl / total,
                 "Fixed Income / Debt": debt / total,
                 "Gold / Commodities": gold / total,
                 "Cash & Equivalents": cash / total
             }
-        except ValueError:
+            return "Custom Model", custom_dict
+        except (ValueError, EOFError, KeyboardInterrupt):
             print("Invalid input. Defaulting to Aggressive Growth.")
-            return DEFAULT_ALLOCATION_MODELS["Aggressive Growth"]
+            return "Aggressive Growth", DEFAULT_ALLOCATION_MODELS["Aggressive Growth"]
     else:
-        return DEFAULT_ALLOCATION_MODELS["Aggressive Growth"]
+        return "Aggressive Growth", DEFAULT_ALLOCATION_MODELS["Aggressive Growth"]
+
+
+def select_target_model() -> Dict[str, float]:
+    """Helper to select or customize a target asset allocation model (returns target dict)."""
+    _, targets = prompt_investment_mode()
+    return targets
 
 
 def enter_user_stocks_wizard():
@@ -475,6 +499,7 @@ def run_conversational_chat_loop():
     print("  • 'Rebalance my portfolio with the Moderate model'")
     print("  • 'What if I infuse 25k fresh cash?'")
     print("  • 'What is my LTCG tax liability if I sell 20 TCS shares?'")
+    print("  • Type 'mode' anytime to choose or switch investment mode (Conservative / Moderate / Aggressive)")
     print("Type 'exit', 'quit', or 'back' to return to the main menu.\n")
     print(COMPLIANCE_BANNER)
 
@@ -489,6 +514,28 @@ def run_conversational_chat_loop():
             if user_msg.lower() in ("exit", "quit", "q", "back"):
                 print("\nReturning to main menu.")
                 break
+
+            # Allow user to switch or choose investment mode anytime
+            if user_msg.lower() in ("mode", "model", "investment mode", "change mode", "switch mode", "select mode"):
+                name, targets = prompt_investment_mode(session.target_model_name)
+                session.set_target_model(name, targets)
+                print(f"\n✓ Investment mode set to: {session.target_model_name}")
+                if session.get_holdings_list():
+                    print("\nAdvisor 🤖 > Re-evaluating portfolio under new model...")
+                    reply = session.chat(f"Rebalance my portfolio with {session.target_model_name} model")
+                    print(f"\nAdvisor 🤖 >\n{reply}")
+                continue
+
+            # Detect if investment info (stocks or cash reserve) is provided in this message
+            parsed = parse_conversational_text(user_msg)
+            has_new_investment_info = bool(parsed.get("stocks")) or (parsed.get("cash", 0.0) > 0)
+
+            # If user provided investment info and hasn't chosen an investment mode yet
+            if has_new_investment_info and not parsed.get("target_model") and not session.mode_selected:
+                print("\n💡 Investment information received!")
+                name, targets = prompt_investment_mode(session.target_model_name)
+                session.set_target_model(name, targets)
+                print(f"✓ Target investment mode set to: {session.target_model_name}")
 
             print("\nAdvisor 🤖 > Processing your portfolio & market data...")
             reply = session.chat(user_msg)
@@ -505,43 +552,16 @@ def interactive_menu():
     while True:
         print("\nPlease select an option:")
         print("  [1] 💬 Conversational Advisor Chat Mode (e.g. 'I have 100 stocks of TCS and available cash is 50k')")
-        print("  [2] 📝 Enter My Invested Stocks (Step-by-Step Wizard or Shorthand)")
-        if os.path.exists(USER_PORTFOLIO_FILE):
-            print("  [3] 📂 Load My Saved Portfolio (data/user_portfolio.json)")
-        else:
-            print("  [3] 📂 Load Saved Portfolio (None saved yet)")
-        print("  [4] 📊 Analyze Demo Portfolio with 'Aggressive Growth' Model (50/15/20/10/5)")
-        print("  [5] 📊 Analyze Demo Portfolio with 'Moderate Balanced' Model (40/10/35/10/5)")
-        print("  [6] 💵 Cash Inflow Rebalancing (₹1,00,000 lump sum deployment to eliminate drift)")
-        print("  [7] 🛡️  Conservative Wealth Preservation Model (20/5/55/15/5)")
-        print("  [8] 🧪 Run Automated Self-Test")
         print("  [0] Exit")
 
-        choice = input("\nEnter choice [0-8]: ").strip()
+        choice = input("\nEnter choice [0-1]: ").strip()
         if choice == "0":
             print("\nThank you for using Autonomous Portfolio & Rebalancing Advisor. Exiting.")
             sys.exit(0)
         elif choice == "1":
             run_conversational_chat_loop()
-        elif choice == "2":
-            enter_user_stocks_wizard()
-        elif choice == "3":
-            if os.path.exists(USER_PORTFOLIO_FILE):
-                run_preset(1, portfolio_path=USER_PORTFOLIO_FILE)
-            else:
-                print("No saved portfolio found. Use Option [1] or [2] to enter your stocks.")
-        elif choice == "4":
-            run_preset(1)
-        elif choice == "5":
-            run_preset(2)
-        elif choice == "6":
-            run_preset(3)
-        elif choice == "7":
-            run_preset(4)
-        elif choice == "8":
-            run_self_test()
         else:
-            print("Invalid selection. Please choose from 0 to 8.")
+            print("Invalid selection. Please choose 0 or 1.")
 
 
 def main():

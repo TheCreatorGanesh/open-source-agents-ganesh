@@ -15,6 +15,7 @@
 - **Conversational Advisor & Multi-Turn Memory**: Supports continuous dialogue in natural language, understanding Indian colloquial denominations (e.g., *"I have 100 stocks of TCS and my available cash is 50k (means rs.50000)"*), persisting portfolio state across turns, and flagging asset concentration risks.
 - **Real-Time Indian Market Data**: Queries Yahoo Finance (`yfinance`) for NSE/BSE equities, broad market ETFs (`NIFTYBEES.NS`), US tech ETFs (`MON100.NS`), Gold ETFs (`GOLDBEES.NS`), and Liquid debt instruments (`LIQUIDBEES.NS`), with resilient par-value handling for government bonds and cash reserves.
 - **Zero-Network / Offline Fallback Guardrail**: Seamless fallback to curated mock market data whenever offline or experiencing network timeouts, ensuring zero unhandled crashes.
+- **Strategic Trade Rationales (Why Buy / Sell Each Stock)**: Automatically explains the exact institutional and strategic rationale behind every single buy, sell, or hold recommendation (e.g., de-risking single-stock concentration, hedging macro inflation and currency depreciation via Gold ETFs, fixed income volatility dampening, or re-aligning overweight positions).
 - **Tax-Aware Inflow Rebalancing**: Computes optimal deployment of fresh capital (lump sums, SIPs, bonuses) into underweighted assets first, curing drift without triggering taxable sell events.
 - **Compliance Guardrail**: Every analysis includes a prominent, mandatory compliance disclaimer banner aligned with SEBI advisory norms.
 - **Interactive CLI & Rich Presentation**: Beautiful ASCII and Unicode tables using `tabulate` with presets for Aggressive, Moderate, and Conservative asset allocation profiles.
@@ -122,15 +123,23 @@ In conversational mode, you can type natural Indian financial expressions:
 
 The agent maintains portfolio state across turns, understands Indian colloquial denominations (`50k` = ₹50,000, `1L` = ₹1,00,000, `2 cr` = ₹2,00,00,000), evaluates concentration risks, and provides deterministic drift tables and rebalancing plans.
 
+**Investment Mode Selection**:
+Whenever you provide investment info (e.g., *"I have 100 stocks of TCS and available cash is 50k"*), the system prompts you to select your preferred investment mode / risk profile before calculating rebalancing:
+- **[1] Aggressive Growth** (50% Indian Equity, 15% Int'l, 20% Debt, 10% Gold, 5% Cash)
+- **[2] Moderate Balanced** (40% Indian Equity, 10% Int'l, 35% Debt, 10% Gold, 5% Cash)
+- **[3] Conservative Preservation** (20% Indian Equity, 5% Int'l, 55% Debt, 15% Gold, 5% Cash)
+- **[4] Custom Percentages**
+
+You can also switch models anytime in chat by typing `mode` or asking naturally (e.g. *"Switch to Moderate Balanced"* or *"Rebalance with Conservative model"*).
+
 ### 2. Interactive Menu
 Launch the interactive CLI menu:
 ```bash
 python main.py
 ```
 From the menu:
-- **Select `[1]` for Conversational Chat Mode**
-- **Select `[2]` for Step-by-Step Stock Wizard**
-- **Select `[3]` to Load Saved Portfolio (`data/user_portfolio.json`)**
+- **Select `[1]` for Conversational Advisor Chat Mode**
+- **Select `[0]` to Exit**
 
 ### 3. Direct User Input via Command-Line Flags
 Pass your invested holdings directly through the command line:
@@ -224,6 +233,26 @@ Strategy:          High Inflow Efficiency
 ├──────────┼───────────────┼────────────────────────────┼──────────┼──────────────┼───────────────┼────────────────┼────────────┤
 │ 🔴 SELL  │ INR_CASH      │ High Yield Bank Savings /  │ 48,855   │ ₹1.00        │ ₹48,855.00    │ 5.00%          │ 5.00%      │
 ╘══════════╧═══════════════╧════════════════════════════╧══════════╧══════════════╧═══════════════╧════════════════╧════════════╛
+
+[Strategic Trade Rationales (Why Buy or Sell Each Stock)]
+  • 🟢 BUY RELIANCE.NS (9 shares / ₹11,569.50):
+    ↳ Underweight by -41.8%. Accumulate RELIANCE.NS to build up towards target 50.0%.
+  • 🟢 BUY TCS.NS (4 shares / ₹14,080.00):
+    ↳ Underweight by -38.9%. Accumulate TCS.NS to build up towards target 50.0%.
+  • 🟢 BUY HDFCBANK.NS (12 shares / ₹20,160.00):
+    ↳ Underweight by -36.5%. Accumulate HDFCBANK.NS to build up towards target 50.0%.
+  • 🟢 BUY NIFTYBEES.NS (96 shares / ₹25,478.40):
+    ↳ Underweight by -33.0%. Accumulate NIFTYBEES.NS to build up towards target 50.0%.
+  • 🟢 BUY MON100.NS (255 shares / ₹44,064.00):
+    ↳ Underweight by -1.5%. Add international equity units to reach target 15.0%.
+  • 🔴 SELL LIQUIDBEES.NS (27 shares / ₹27,000.00):
+    ↳ Trim position as Fixed Income / Debt is overweight by +3.7%. Rebalance back to strategic 20.0% model.
+  • 🔴 SELL GOI_BONDS (22 shares / ₹22,550.00):
+    ↳ Trim position as Fixed Income / Debt is overweight by +3.7%. Rebalance back to strategic 20.0% model.
+  • 🟢 BUY GOLDBEES.NS (1,166 shares / ₹79,521.20):
+    ↳ Underweight by -3.6%. Accumulate Gold ETF to reach target 10.0% for geopolitical hedging and inflation resistance.
+  • 🔴 SELL INR_CASH (48,855 shares / ₹48,855.00):
+    ↳ Cash reserve is overweight (7.8% vs 5.0% target). Deploy idle cash into productive assets to prevent real inflation drag (~5% CPI).
 
 ================================================================================
 ⚠️  COMPLIANCE DISCLAIMER

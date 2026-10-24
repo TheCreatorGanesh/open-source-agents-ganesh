@@ -368,11 +368,11 @@ def parse_conversational_text(text: str) -> Dict[str, Any]:
 
     # 4. Target model detection
     t_lower = text.lower()
-    if "aggressive" in t_lower:
+    if "aggressive" in t_lower or "high risk" in t_lower:
         res["target_model"] = "Aggressive Growth"
-    elif "moderate" in t_lower:
+    elif "moderate" in t_lower or "balanced" in t_lower:
         res["target_model"] = "Moderate Balanced"
-    elif "conservative" in t_lower:
+    elif "conservative" in t_lower or "preserv" in t_lower or "low risk" in t_lower:
         res["target_model"] = "Conservative Preservation"
 
     return res
@@ -678,6 +678,107 @@ def calculate_portfolio_drift(
     }
 
 
+BENCHMARK_INSTRUMENTS: Dict[str, Dict[str, Any]] = {
+    "Gold / Commodities": {
+        "ticker": "GOLDBEES.NS",
+        "name": "Nippon India ETF Gold BeES",
+        "asset_class": "Gold / Commodities",
+        "sector": "Precious Metals"
+    },
+    "Fixed Income / Debt": {
+        "ticker": "LIQUIDBEES.NS",
+        "name": "Nippon India ETF Liquid BeES",
+        "asset_class": "Fixed Income / Debt",
+        "sector": "Money Market / Liquid"
+    },
+    "International Equity": {
+        "ticker": "MON100.NS",
+        "name": "Motilal Oswal Nasdaq 100 ETF",
+        "asset_class": "International Equity",
+        "sector": "US Tech / Global"
+    },
+    "Indian Equity": {
+        "ticker": "NIFTYBEES.NS",
+        "name": "Nippon India ETF Nifty 50 BeES",
+        "asset_class": "Indian Equity",
+        "sector": "Large Cap Index"
+    }
+}
+
+
+def generate_trade_rationale(
+    action: str,
+    ticker: str,
+    asset_class: str,
+    current_pct: float,
+    target_pct: float,
+    drift_pct: float,
+    is_new_position: bool = False
+) -> str:
+    """
+    Explains precisely WHY a stock or asset should be bought, sold, or held.
+    """
+    if action == "SELL":
+        if ticker in ("INR_CASH", "CASH"):
+            return (
+                f"Cash reserve is overweight ({current_pct:.1f}% vs {target_pct:.1f}% target). "
+                f"Deploy idle cash into productive assets to prevent real inflation drag (~5% CPI)."
+            )
+        if asset_class == "Indian Equity" and current_pct > 30.0:
+            return (
+                f"De-risk severe single-stock concentration ({current_pct:.1f}% vs {target_pct:.1f}% target). "
+                f"Trimming locks in gains and shields portfolio against company-specific shocks."
+            )
+        return (
+            f"Trim position as {asset_class} is overweight by {drift_pct:+.1f}%. "
+            f"Rebalance back to the strategic {target_pct:.1f}% target model."
+        )
+
+    elif action == "BUY":
+        if is_new_position:
+            if asset_class == "Gold / Commodities":
+                return (
+                    f"Establish missing {target_pct:.1f}% Gold allocation. "
+                    f"Provides an essential macro hedge against currency depreciation (INR/USD) and market volatility."
+                )
+            if asset_class == "Fixed Income / Debt":
+                return (
+                    f"Establish missing {target_pct:.1f}% Fixed Income foundation. "
+                    f"Provides capital preservation, steady yield, and stabilizes equity drawdowns."
+                )
+            if asset_class == "International Equity":
+                return (
+                    f"Establish missing {target_pct:.1f}% International allocation. "
+                    f"Provides geographic diversification and participation in secular US tech growth."
+                )
+            return (
+                f"Establish core {asset_class} allocation to fulfill strategic {target_pct:.1f}% model target."
+            )
+
+        if asset_class == "Gold / Commodities":
+            return (
+                f"Underweight by {drift_pct:+.1f}%. Accumulate Gold ETF to reach target {target_pct:.1f}% "
+                f"for geopolitical hedging and inflation resistance."
+            )
+        if asset_class == "Fixed Income / Debt":
+            return (
+                f"Underweight by {drift_pct:+.1f}%. Accumulate debt/liquid instruments to reach target {target_pct:.1f}% "
+                f"and dampen overall portfolio volatility."
+            )
+        if asset_class == "International Equity":
+            return (
+                f"Underweight by {drift_pct:+.1f}%. Add international equity units to reach target {target_pct:.1f}%."
+            )
+        return (
+            f"Underweight by {drift_pct:+.1f}%. Accumulate {ticker} to build up towards target {target_pct:.1f}%."
+        )
+
+    return (
+        f"Position is well-aligned with target model (drift {drift_pct:+.1f}%). "
+        f"Hold to avoid unnecessary brokerage, STT, and capital gains tax."
+    )
+
+
 def calculate_rebalance_orders(
     current_holdings: List[Dict[str, Any]],
     target_allocations: Dict[str, float],
@@ -686,6 +787,7 @@ def calculate_rebalance_orders(
     """
     Computes exact, deterministic buy/sell orders (share counts, trade values, and
     post-rebalance allocations) to eliminate portfolio drift against the target model.
+    Includes deterministic, institutional-grade rationales explaining WHY to buy/sell each stock.
     Supports optional new cash infusion (inflow rebalancing) to minimize taxable sales.
 
     Args:
@@ -695,7 +797,7 @@ def calculate_rebalance_orders(
 
     Returns:
         dict: Detailed order book with Action (BUY/SELL/HOLD), share counts, trade value,
-              tax awareness metrics, and post-rebalance allocation percentages.
+              rationales explaining WHY, tax awareness metrics, and post-rebalance allocations.
     """
     # First get current drift and valuation
     drift_result = calculate_portfolio_drift(current_holdings, target_allocations)
@@ -738,7 +840,47 @@ def calculate_rebalance_orders(
         sub_holdings = class_holdings.get(ac, [])
 
         if not sub_holdings:
-            # Asset class has target allocation but no existing holding
+            # Asset class has target allocation but no existing holding.
+            # If positive delta (underweight), introduce the benchmark ETF!
+            if delta > 100 and ac in BENCHMARK_INSTRUMENTS:
+                bench = BENCHMARK_INSTRUMENTS[ac]
+                b_ticker = bench["ticker"]
+                b_price_data = fetch_live_prices([b_ticker])["prices"].get(b_ticker, {})
+                b_price = float(b_price_data.get("current_price", MOCK_PRICES.get(b_ticker, {}).get("current_price", 100.0)))
+                shares_to_buy = int(math.floor(delta / b_price)) if b_price > 0 else 0
+                trade_val = round(shares_to_buy * b_price, 2)
+                if shares_to_buy > 0:
+                    total_buy_value += trade_val
+                    post_pct = round((trade_val / new_total * 100.0) if new_total > 0 else 0.0, 2)
+                    rat = generate_trade_rationale(
+                        action="BUY",
+                        ticker=b_ticker,
+                        asset_class=ac,
+                        current_pct=0.0,
+                        target_pct=norm_targets.get(ac, 0.0),
+                        drift_pct=-norm_targets.get(ac, 0.0),
+                        is_new_position=True
+                    )
+                    orders.append({
+                        "ticker": b_ticker,
+                        "name": bench["name"],
+                        "asset_class": ac,
+                        "action": "BUY",
+                        "current_shares": 0,
+                        "shares_to_trade": shares_to_buy,
+                        "post_trade_shares": shares_to_buy,
+                        "unit_price": b_price,
+                        "unit_price_formatted": format_inr(b_price),
+                        "order_value": trade_val,
+                        "order_value_formatted": format_inr(trade_val),
+                        "current_value": 0.0,
+                        "current_value_formatted": "₹0.00",
+                        "post_trade_value": trade_val,
+                        "post_trade_value_formatted": format_inr(trade_val),
+                        "post_trade_pct": post_pct,
+                        "target_pct": norm_targets.get(ac, 0.0),
+                        "rationale": rat
+                    })
             continue
 
         total_sub_val = sum(h["current_value"] for h in sub_holdings)
@@ -796,6 +938,17 @@ def calculate_rebalance_orders(
                 post_val = curr_val
 
             post_pct = round((post_val / new_total * 100.0) if new_total > 0 else 0.0, 2)
+            holding_curr_pct = round((curr_val / current_total * 100.0) if current_total > 0 else 0.0, 2)
+            holding_drift = round(holding_curr_pct - norm_targets.get(ac, 0.0), 2)
+
+            rat = generate_trade_rationale(
+                action=action,
+                ticker=ticker,
+                asset_class=ac,
+                current_pct=holding_curr_pct,
+                target_pct=norm_targets.get(ac, 0.0),
+                drift_pct=holding_drift
+            )
 
             orders.append({
                 "ticker": ticker,
@@ -814,7 +967,8 @@ def calculate_rebalance_orders(
                 "post_trade_value": post_val,
                 "post_trade_value_formatted": format_inr(post_val),
                 "post_trade_pct": post_pct,
-                "target_pct": norm_targets.get(ac, 0.0)
+                "target_pct": norm_targets.get(ac, 0.0),
+                "rationale": rat
             })
 
     total_buy_value = round(total_buy_value, 2)

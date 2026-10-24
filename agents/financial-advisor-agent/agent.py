@@ -64,13 +64,19 @@ CORE DIRECTIVES & COMPLIANCE:
    - **Cash-Inflow Rebalancing Preference**:
      * ALWAYS evaluate whether drift can be mitigated by directing fresh capital (cash infusion, SIPs, bonuses) into underweighted asset classes before recommending selling appreciated holdings, which would trigger avoidable capital gains tax and transaction friction (STT, stamp duty, brokerage).
 
-4. COMMUNICATION STYLE:
+4. MANDATORY TRADE RATIONALE (EXPLAIN WHY BUY OR SELL):
+   - For every recommended BUY or SELL order, you MUST provide an explicit, analytical rationale explaining WHY the investor should execute it:
+     * WHY SELL: Detail asset class overweight drift, single-stock concentration de-risking, re-aligning with target model, locking in gains, or deploying surplus cash.
+     * WHY BUY: Detail closing underweight asset class gaps, macro inflation/currency hedging with Gold, fixed income volatility dampening, or global secular tech growth.
+
+5. COMMUNICATION STYLE:
    - Highly professional, analytical, objective, and risk-aware.
    - Break down analysis into:
      1. Executive Portfolio Health Check
      2. Asset Class Drift Breakdown
      3. Actionable Rebalancing Plan (with Buy/Sell/Hold orders)
-     4. Indian Tax Efficiency & Execution Strategy
+     4. Strategic Trade Rationales (Why Buy or Sell Each Stock)
+     5. Indian Tax Efficiency & Execution Strategy
 """
 
 
@@ -202,6 +208,17 @@ class FinancialAdvisorAgent:
                 f"{ord_item['shares_to_trade']:,} | {ord_item['unit_price_formatted']} | "
                 f"{ord_item['order_value_formatted']} | {ord_item['post_trade_pct']:.2f}% | {ord_item['target_pct']:.2f}% |"
             )
+
+        lines.extend([
+            "",
+            "### 💡 Strategic Trade Rationales (Why Buy or Sell Each Stock):"
+        ])
+        for ord_item in rebalance_data.get("orders", []):
+            if ord_item["action"] == "HOLD":
+                continue
+            act_icon = "🟢 BUY" if ord_item["action"] == "BUY" else "🔴 SELL"
+            rat = ord_item.get("rationale", "Rebalance to align with target asset allocation.")
+            lines.append(f"- **{act_icon} `{ord_item['ticker']}`** ({ord_item['shares_to_trade']:,} shares / {ord_item['order_value_formatted']}): {rat}")
 
         lines.extend([
             "",
@@ -340,6 +357,7 @@ class ConversationalAdvisorSession:
         self.target_allocations = dict(self.DEFAULT_TARGETS["Aggressive Growth"])
         self.cash_infusion = 0.0
         self.gemini_chat = None
+        self.mode_selected = False
 
         if self.agent.has_valid_api_key and self.agent.client:
             try:
@@ -365,6 +383,17 @@ class ConversationalAdvisorSession:
             except Exception as e:
                 warnings.warn(f"Failed to start Gemini chat session: {e}. Falling back to deterministic chat engine.")
                 self.gemini_chat = None
+
+    def set_target_model(self, model_name: str, custom_allocations: Optional[Dict[str, float]] = None):
+        """Sets the active target asset allocation model and marks mode_selected."""
+        if custom_allocations:
+            self.target_model_name = model_name
+            self.target_allocations = dict(custom_allocations)
+            self.mode_selected = True
+        elif model_name in self.DEFAULT_TARGETS:
+            self.target_model_name = model_name
+            self.target_allocations = dict(self.DEFAULT_TARGETS[model_name])
+            self.mode_selected = True
 
     def get_holdings_list(self) -> List[Dict[str, Any]]:
         """Returns the current accumulated list of holdings."""
@@ -404,6 +433,7 @@ class ConversationalAdvisorSession:
             m_name = parsed_data["target_model"]
             self.target_model_name = m_name
             self.target_allocations = dict(self.DEFAULT_TARGETS[m_name])
+            self.mode_selected = True
 
         current_holdings = self.get_holdings_list()
 
@@ -512,6 +542,15 @@ class ConversationalAdvisorSession:
                     f"| {act_icon} | `{o['ticker']}` | {o['shares_to_trade']:,} | "
                     f"{o['unit_price_formatted']} | {o['order_value_formatted']} | {o['target_pct']:.2f}% |"
                 )
+
+            lines.extend([
+                "",
+                "### 💡 Strategic Trade Rationales (Why Buy or Sell Each Stock):"
+            ])
+            for o in action_orders:
+                act_icon = "🟢 BUY" if o["action"] == "BUY" else "🔴 SELL"
+                rat = o.get("rationale", "Rebalance to target allocation.")
+                lines.append(f"- **{act_icon} `{o['ticker']}`** ({o['shares_to_trade']:,} shares / {o['order_value_formatted']}): {rat}")
 
         # Indian Tax-Aware Guidance
         has_cash = "INR_CASH" in self.holdings_map and self.holdings_map["INR_CASH"]["shares"] > 0
